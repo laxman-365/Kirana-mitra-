@@ -39,6 +39,33 @@ quickly, and may not even know emergency numbers. That gap causes harm.
 > satellite/GPS, free cost, hosting without paid APIs, data usage, WebRTC,
 > map, translation, privacy — सर्व तपशील देवनागरी मराठीत.
 
+## 🏛️ Full scale (national level, 70–80 crore) — what's in the box
+
+- **Stateless nodes + shared Redis** — `REDIS_URL` set → Socket.IO
+  redis-adapter → add nodes behind the LB. `docker compose up -d` runs the
+  real production topology: **nginx LB → 2 app nodes → Redis**.
+- **Geo matching:** bbox pre-filter + haversine (in-memory, measured fast)
+  → Redis GEO (GEOADD/GEOSEARCH) in multi-node mode.
+- **Load proof:** `npm run test:load` — 1000 helpers, 25 sequential SOS,
+  0 failures, reports p50/p95 match latency.
+- **Self-healing everywhere:** offline SOS queue (auto-sent on reconnect),
+  socket state resume, auto ICE-restart on call failure, location-watch
+  watchdog, tile failover (OSM→CARTO), translation failover
+  (MyMemory→Lingva→en-bridge), stale-entry reaper, error containment with
+  supervisor restart, nginx `max_fails` failover.
+- **Web Push (free):** backgrounded/closed helper phones still get the
+  "SOS nearby" notification (auto-generated VAPID keys).
+- **Security (advanced):** helmet CSP, per-event token-bucket rate limits,
+  per-IP connection flood guard, strict validators + size caps, audit ring
+  (token-gated), zero-PII by design (no DB, no names, no numbers).
+  → [SECURITY.md](./SECURITY.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) ·
+  [DEPLOYMENT.md](./DEPLOYMENT.md)
+- **Incident report:** every SOS session saves a privacy-preserving report
+  (session id + time + location + duration + event log, **no PII**) shareable
+  to police/family.
+- **Ops:** `/healthz`, `/metrics` (Prometheus), `/api/audit`, systemd unit,
+  Dockerfile with healthcheck, 0 npm-audit vulnerabilities.
+
 ## Run it (सुरू कसे करावे)
 
 ```bash

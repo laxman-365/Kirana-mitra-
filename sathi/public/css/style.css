@@ -272,6 +272,26 @@ main { flex: 1; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
 .cbtn-end { background: linear-gradient(135deg, #ff5147, #d61f1f); border: none; }
 .cbtn-end span { color: #ffd9d6; }
 
+/* ---------- trust strip ---------- */
+.trust-strip { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 2px 6px; }
+.trust-chip {
+  font-size: 11.5px; font-weight: 700; color: var(--muted);
+  background: var(--card2); border: 1px solid var(--line);
+  padding: 4px 9px; border-radius: 999px;
+}
+
+/* ---------- connection dot ---------- */
+.conn-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.conn-dot.on { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,.8); }
+.conn-dot.off { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,.7); }
+
+/* ---------- incident report ---------- */
+.report {
+  background: var(--card2); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; font-size: 12.5px; color: var(--muted); line-height: 1.5;
+  margin: 10px 0; text-align: left;
+}
+
 /* ---------- end ---------- */
 .end-wrap { text-align: center; padding-top: 24px; }
 .end-ic { font-size: 64px; }

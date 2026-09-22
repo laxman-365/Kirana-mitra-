@@ -21,13 +21,14 @@
   <!-- ================= TOP BAR ================= -->
   <header class="topbar">
     <div class="brand">
-      <span class="brand-logo">🤝</span>
+      <span class="brand-logo"><img src="/icon-512.png" alt="" width="26" height="26" style="border-radius:6px"></span>
       <div>
         <div class="brand-name">Sathi <span class="dev">साथी</span></div>
         <div class="brand-sub" data-i18n="tagline">Never alone · आपण एकटे नाही</div>
       </div>
     </div>
     <div class="topbar-right">
+      <span class="conn-dot" id="connDot" title="connection"></span>
       <select id="langSel" class="langsel" aria-label="भाषा / Language"></select>
       <span class="badge" id="roleBadge" hidden></span>
     </div>
@@ -45,6 +46,13 @@
           दोघांचेही <b>live location</b> दिसत राहतं. <b>भाषा फरक पण नाही</b> —
           तुमचे बोललेले/लिहिललेले त्यांच्या भाषेत, आणि उलट.
         </p>
+      </div>
+
+      <div class="trust-strip">
+        <span class="trust-chip">💰 ₹0 खर्च</span>
+        <span class="trust-chip">🌐 23 भाषा</span>
+        <span class="trust-chip">🔒 Anonymous</span>
+        <span class="trust-chip">📍 Live GPS</span>
       </div>
 
       <div class="card demo-card">
@@ -217,6 +225,8 @@
         <div class="end-ic" id="endIc">✅</div>
         <h2 data-i18n="endTitle">तुम्ही सुरक्षित आहात का?</h2>
         <p class="hero-sub" data-i18n="endSub">तुमच्या सथीला धन्यवाद! ❤️</p>
+        <div class="report" id="reportBox"></div>
+        <button class="cta cta-plain" id="btnReport">📄 Session report share करा (PII नाही)</button>
         <button class="cta cta-green" id="btnSafe" data-i18n="safe">✅ हो, मी सुरक्षित आहे</button>
         <button class="cta cta-red" id="btnMoreHelp" data-i18n="moreHelp">🆘 अजून मदत हवी</button>
         <a class="cta cta-plain" href="tel:112" data-i18n="call112">🚨 थेट 112 पॉलिस</a>

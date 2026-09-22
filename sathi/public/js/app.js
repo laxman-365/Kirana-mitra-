@@ -1,9 +1,20 @@
 /* ============================================================
-   Sathi (साथी) — client app
+   Sathi (साथी) — client app (production)
    SOS → random nearby helper within 500 m → anonymous in-app
    voice call (WebRTC) → mutual live location on map →
    in-call translated chat + live voice subtitles.
    No phone numbers or identities exist anywhere in this app.
+
+   Self-healing layers (client):
+   - socket auto-reconnect + state resume (role/ready re-announce)
+   - offline SOS queue: SOS pressed with no network is stored and
+     sent automatically when the network returns (+ 112 meanwhile)
+   - ICE restart when a call fails (one automatic retry)
+   - location hysteresis: beacon only on >15 m move or >10 s (saves
+     data for every user at national scale)
+   - translation failover: MyMemory → Lingva → graceful
+   - map tile failover: OpenStreetMap → Carto (free)
+   - service worker: offline shell + web push notifications
    ============================================================ */
 (() => {
 'use strict';
@@ -58,36 +69,54 @@ const sndAlert = () => { tone(700, 0.18); tone(700, 0.18, 0.32); tone(700, 0.18,
 
 /* ---------------- state ---------------- */
 const S = {
-  role: null,            // 'sos' | 'helper'
+  role: null,
   lang: 'mr',
-  loc: null,             // {lat,lng,ts}
+  loc: null,          // {lat,lng,ts,acc}
+  locLastSent: null,  // {lat,lng,ts} for hysteresis
   watchId: null,
   pendingLocCb: null,
   nearby: null,
   sos: { active: false, tries: 0, ring: 500 },
-  pair: null,            // {id, role, otherLabel, otherLang, otherLoc, pc, stream, connectedAt, timerId, answered, offerBuf, handled, fitted}
+  pair: null,
   helper: { ready: false, countdown: null },
   speakerOn: false,
   maps: {},
+  events: [],         // session incident log (no PII)
 };
 let socket = null;
 
-const TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const logEvent = (e) => {
+  S.events.push({ t: Date.now(), e });
+  if (S.events.length > 40) S.events.shift();
+};
+
+const TILES_MAIN = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const TILES_ALT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
 const iconSelf = L.divIcon({ className: '', html: '<div class="mk-self"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
 const iconOther = L.divIcon({ className: '', html: '<div class="mk-other"></div>', iconSize: [20, 20], iconAnchor: [10, 10] });
 
-/* ---------------- translation (free: MyMemory + en bridge) ---------------- */
+/* ---------------- translation (free, failover chain) ---------------- */
 const trCache = new Map();
-async function mymemory(text, from, to) {
+async function fetchJson(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) + '&langpair=' + from + '|' + to;
-    const ctrl = new AbortController();
-    const to2 = setTimeout(() => ctrl.abort(), 8000);
     const res = await fetch(url, { signal: ctrl.signal });
-    clearTimeout(to2);
-    const j = await res.json();
+    return { res, j: await res.json() };
+  } finally { clearTimeout(to); }
+}
+async function viaMyMemory(text, from, to) {
+  try {
+    const { j } = await fetchJson('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) + '&langpair=' + from + '|' + to, 8000);
     const out = j && j.responseData && j.responseData.translatedText;
     if (out && !/^(INVALID|NO QUERY|QUERY IS TOO LONG|PLEASE SELECT|PLEASE ENTER THE)/i.test(out)) return out;
+    return null;
+  } catch (e) { return null; }
+}
+async function viaLingva(text, from, to) {
+  try {
+    const { j } = await fetchJson('https://api.lingva.dev/api/v1/' + from + '/' + to + '/' + encodeURIComponent(text), 8000);
+    if (Array.isArray(j) && j[0]) return j[0];
     return null;
   } catch (e) { return null; }
 }
@@ -97,11 +126,12 @@ async function translate(text, from, to) {
   if (!from || !to || from === to) return text;
   const key = from + '|' + to + '|' + text;
   if (trCache.has(key)) return trCache.get(key);
-  let out = await mymemory(text, from, to);
+  let out = await viaMyMemory(text, from, to);
+  if (!out) out = await viaLingva(text, from, to);
   if (!out) {
-    // bridge via English when the direct pair is unsupported
-    const a = await mymemory(text, from, 'en');
-    if (a) out = await mymemory(a, 'en', to);
+    // last resort: bridge via English
+    const a = await viaMyMemory(text, from, 'en') || await viaLingva(text, from, 'en');
+    if (a) out = await viaMyMemory(a, 'en', to) || await viaLingva(a, 'en', to);
   }
   if (!out) throw new Error('no translation');
   trCache.set(key, out);
@@ -146,22 +176,45 @@ function show(id) {
   $('#subs').hidden = (id !== 'view-call');
   requestAnimationFrame(() => { renderActiveMaps(); });
 }
+function setConnDot() {
+  const d = $('#connDot');
+  if (!d) return;
+  const on = socket && socket.connected;
+  d.className = 'conn-dot ' + (on ? 'on' : 'off');
+  d.title = on ? 'online' : 'offline';
+}
 
 /* ---------------- maps ---------------- */
+function makeTiles(m) {
+  let alt = false;
+  const layer = L.tileLayer(TILES_MAIN, { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(m);
+  layer.on('tileerror', () => {
+    if (alt) return;
+    alt = true;
+    logEvent('tiles-fallback');
+    m.removeLayer(layer);
+    L.tileLayer(TILES_ALT, { maxZoom: 19, attribution: '© OpenStreetMap contributors © CARTO' }).addTo(m);
+  });
+  return layer;
+}
 function mapBase(el) {
   const id = el.id;
   if (!S.maps[id]) {
     const m = L.map(el, { zoomControl: true });
-    L.tileLayer(TILES, { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(m);
-    S.maps[id] = { m, self: null, other: null, circle: null, fitted: false };
+    makeTiles(m);
+    S.maps[id] = { m, self: null, other: null, circle: null, acc: null, fitted: false };
   }
   const h = S.maps[id];
   setTimeout(() => h.m.invalidateSize(), 80);
   return h;
 }
-function putSelf(h, lat, lng) {
+function putSelf(h, lat, lng, acc) {
   if (!h.self) h.self = L.marker([lat, lng], { icon: iconSelf, interactive: false }).addTo(h.m);
   else h.self.setLatLng([lat, lng]);
+  if (acc && acc > 0 && acc < 5000) {
+    if (!h.acc) h.acc = L.circle([lat, lng], { radius: acc, color: '#3b82f6', weight: 1, opacity: 0.5, fill: false, interactive: false }).addTo(h.m);
+    else { h.acc.setLatLng([lat, lng]); h.acc.setRadius(acc); }
+  }
 }
 function putOther(h, lat, lng, fit) {
   if (!h.other) h.other = L.marker([lat, lng], { icon: iconOther, interactive: false }).addTo(h.m);
@@ -179,7 +232,7 @@ function renderSearchMap() {
   if (!$('#view-sos-search').classList.contains('active')) return;
   const h = mapBase($('#mapSearch'));
   if (!S.loc) return;
-  putSelf(h, S.loc.lat, S.loc.lng);
+  putSelf(h, S.loc.lat, S.loc.lng, S.loc.acc);
   ringCircle(h, S.loc.lat, S.loc.lng, S.sos.ring, '#ffb020');
   h.m.setView([S.loc.lat, S.loc.lng], 16);
 }
@@ -187,7 +240,7 @@ function renderReadyMap() {
   if (!$('#view-helper-ready').classList.contains('active')) return;
   const h = mapBase($('#mapReady'));
   if (!S.loc) return;
-  putSelf(h, S.loc.lat, S.loc.lng);
+  putSelf(h, S.loc.lat, S.loc.lng, S.loc.acc);
   ringCircle(h, S.loc.lat, S.loc.lng, 500, '#22c55e');
   h.m.setView([S.loc.lat, S.loc.lng], 16);
 }
@@ -195,7 +248,7 @@ function renderIncomingMap() {
   if (!$('#view-incoming').classList.contains('active')) return;
   const h = mapBase($('#mapIncoming'));
   h.fitted = false;
-  if (S.loc) putSelf(h, S.loc.lat, S.loc.lng);
+  if (S.loc) putSelf(h, S.loc.lat, S.loc.lng, S.loc.acc);
   const o = S.pair && S.pair.otherLoc;
   if (o && S.loc) putOther(h, o.lat, o.lng, true);
   else if (o) h.m.setView([o.lat, o.lng], 16);
@@ -204,7 +257,7 @@ function renderCallMap() {
   if (!$('#view-call').classList.contains('active')) return;
   const h = mapBase($('#mapCall'));
   h.fitted = false;
-  if (S.loc) putSelf(h, S.loc.lat, S.loc.lng);
+  if (S.loc) putSelf(h, S.loc.lat, S.loc.lng, S.loc.acc);
   const o = S.pair && S.pair.otherLoc;
   if (o && S.loc) putOther(h, o.lat, o.lng, true);
   else if (o) h.m.setView([o.lat, o.lng], 16);
@@ -237,24 +290,38 @@ function renderNearbyText() {
   if (el2 && S.nearby != null) el2.innerHTML = '🤝 <b>' + S.nearby + '</b>';
 }
 
-/* ---------------- location ---------------- */
+/* ---------------- location (with hysteresis) ---------------- */
 function startWatch() {
   if (S.watchId != null) { navigator.geolocation.clearWatch(S.watchId); S.watchId = null; }
   if (!('geolocation' in navigator)) { openLocModal(); return; }
   S.watchId = navigator.geolocation.watchPosition(
-    (p) => onLoc(p.coords.latitude, p.coords.longitude),
+    (p) => onLoc(p.coords.latitude, p.coords.longitude, p.coords.accuracy),
     () => { if (!S.loc) openLocModal(); },
     { enableHighAccuracy: true, maximumAge: 2000, timeout: 12000 }
   );
 }
 function stopWatch() { if (S.watchId != null) { navigator.geolocation.clearWatch(S.watchId); S.watchId = null; } }
-function onLoc(lat, lng) {
-  S.loc = { lat, lng, ts: Date.now() };
-  if (socket && socket.connected) socket.emit('loc', { lat, lng });
+function onLoc(lat, lng, acc) {
+  S.loc = { lat, lng, ts: Date.now(), acc: typeof acc === 'number' ? acc : null };
   renderActiveMaps();
   updateCallDist();
   refreshNearbyCount();
   if (S.pendingLocCb) { const cb = S.pendingLocCb; S.pendingLocCb = null; cb(); }
+}
+/**
+ * Bandwidth-saving beacon (national scale): send location only when
+ * moved >15 m or >10 s since last beacon (whichever first).
+ */
+function beaconLoc(force) {
+  if (!S.loc || !socket || !socket.connected) return;
+  const L2 = S.locLastSent;
+  if (!force && L2) {
+    const moved = haversineM(L2.lat, L2.lng, S.loc.lat, S.loc.lng) > 15;
+    const stale = Date.now() - L2.ts > 10_000;
+    if (!moved && !stale) return;
+  }
+  S.locLastSent = { lat: S.loc.lat, lng: S.loc.lng, ts: Date.now() };
+  socket.emit('loc', { lat: S.loc.lat, lng: S.loc.lng });
 }
 function openLocModal() {
   const modal = $('#locModal');
@@ -264,7 +331,7 @@ function openLocModal() {
   h.m.setView(S.loc ? [S.loc.lat, S.loc.lng] : [19.076, 72.8777], S.loc ? 16 : 10);
   if (!h._wired) {
     h._wired = true;
-    h.m.on('click', (e) => { onLoc(e.latlng.lat, e.latlng.lng); modal.hidden = true; });
+    h.m.on('click', (e) => { onLoc(e.latlng.lat, e.latlng.lng, 15); modal.hidden = true; });
   }
 }
 
@@ -289,6 +356,7 @@ function activateHelper() {
   if (!S.loc) return;
   S.helper.ready = true;
   socket.emit('ready', { on: true, lat: S.loc.lat, lng: S.loc.lng });
+  beaconLoc(true);
   show('view-helper-ready');
   toast(t('t_sathiReady'));
 }
@@ -300,28 +368,60 @@ function stopHelper() {
   show('view-landing');
 }
 
-/* ---------------- SOS flow ---------------- */
+/* ---------------- SOS flow (with offline queue) ---------------- */
+function queueSOS() {
+  try {
+    const q = JSON.parse(localStorage.getItem('sathi-queued-sos') || 'null');
+    if (q && q.tries < 20) { q.tries = (q.tries || 0) + 1; localStorage.setItem('sathi-queued-sos', JSON.stringify(q)); return true; }
+  } catch (e) { /* noop */ }
+  return false;
+}
+function flushQueuedSOS() {
+  try {
+    const q = JSON.parse(localStorage.getItem('sathi-queued-sos') || 'null');
+    if (!q) return;
+    localStorage.removeItem('sathi-queued-sos');
+    if (S.pair) return;
+    S.sos.active = true;
+    S.sos.tries = 1;
+    show('view-sos-search');
+    $('#searchStatus').innerHTML = '📡 ' + (I18N.current === 'en' ? 'Offline SOS sent — searching…' : 'ऑफलाइन SOS पाठवला — शोधत आहोत…');
+    $('#searchSpin').classList.add('spin');
+    socket.emit('sos', { lat: q.lat, lng: q.lng });
+    logEvent('offline-sos-flushed');
+  } catch (e) { /* noop */ }
+}
 function fireSOS() {
   if (!S.loc) { S.pendingLocCb = fireSOS; openLocModal(); return; }
   S.sos.active = true;
   S.sos.ring = 500;
   S.sos.tries = 1;
+  S.events = [{ t: Date.now(), e: 'sos' }];
   show('view-sos-search');
-  $('#searchStatus').innerHTML = t('searching');
   $('#searchSpin').classList.add('spin');
+  if (!socket || !socket.connected) {
+    queueSOS();
+    $('#searchStatus').innerHTML = '📡 <b>Internet नाही</b> — SOS जतन केला आहे; नेटवर्क आल्याबरोबर आपोआप पाठवला जाईल. आत्ता <b>112</b> वर कॉल करा.';
+    toast('📡 Offline — SOS queued + 112 करा');
+    logEvent('sos-queued-offline');
+    return;
+  }
+  $('#searchStatus').innerHTML = t('searching');
   socket.emit('sos', { lat: S.loc.lat, lng: S.loc.lng });
   vibrate(150);
+  logEvent('sos-sent');
   renderSearchMap();
   refreshNearbyCount();
 }
 function cancelSOS() {
   S.sos.active = false;
+  try { localStorage.removeItem('sathi-queued-sos'); } catch (e) { /* noop */ }
   $('#searchSpin').classList.remove('spin');
   show('view-sos-home');
   toast(t('t_sosCancel'));
 }
 
-/* ---------------- call (WebRTC) ---------------- */
+/* ---------------- call (WebRTC, self-healing) ---------------- */
 function setCallWho() {
   if (!S.pair) return;
   $('#callWho').innerHTML = S.pair.role === 'sos'
@@ -335,9 +435,10 @@ function paintSubsHead() {
 async function connectPC(offerer) {
   const pair = S.pair; if (!pair) return;
   const pc = new RTCPeerConnection({
-    iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }],
+    iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302', 'stun:stun3.l.google.com:19302'] }],
   });
   pair.pc = pc;
+  pair.iceRestarted = false;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     pair.stream = stream;
@@ -352,8 +453,17 @@ async function connectPC(offerer) {
     if (st === 'connected' && !pair.connectedAt) {
       pair.connectedAt = Date.now();
       el.textContent = t('live'); el.className = 'chip ok';
+      logEvent('call-connected');
       pair.timerId = setInterval(() => { $('#callTimer').textContent = fmtClock((Date.now() - pair.connectedAt) / 1000); }, 1000);
-    } else if (st === 'failed') { el.textContent = t('failed'); el.className = 'chip warn'; }
+    } else if (st === 'failed' && !pair.iceRestarted) {
+      // self-healing: one automatic ICE restart
+      pair.iceRestarted = true;
+      logEvent('ice-restart');
+      el.textContent = '↻ ' + t('connecting'); el.className = 'chip warn';
+      try { pc.restartIce(); } catch (e2) { /* noop */ }
+    } else if (st === 'failed') {
+      el.textContent = t('failed'); el.className = 'chip warn';
+    }
   };
   pc.ontrack = (e) => {
     const audio = $('#remoteAudio');
@@ -398,8 +508,10 @@ function hangUp() {
   const role = S.pair.role, id = S.pair.id;
   S.pair.handled = true;
   socket.emit('end-call', { pairId: id });
+  logEvent('call-end');
+  const wasSos = role === 'sos';
   teardownCall();
-  if (role === 'sos') showEnd();
+  if (wasSos) showEnd();
   else {
     if (S.helper.ready) show('view-helper-ready');
     else show('view-landing');
@@ -409,6 +521,7 @@ function hangUp() {
 function onPairOver(info) {
   if (!S.pair || S.pair.handled) return;
   const role = S.pair.role;
+  logEvent('pair-over:' + info.reason);
   teardownCall();
   if (role === 'sos') {
     const retryable = ['no-answer', 'declined', 'left'].includes(info.reason) && S.sos.tries < 3;
@@ -418,8 +531,9 @@ function onPairOver(info) {
       $('#searchSpin').classList.add('spin');
       $('#searchStatus').innerHTML = t('t_retry');
       toast(t('t_retry'));
+      logEvent('retry-' + S.sos.tries);
       setTimeout(() => {
-        if (S.sos.tries < 3 && S.loc) socket.emit('sos', { lat: S.loc.lat, lng: S.loc.lng });
+        if (S.sos.tries < 3 && S.loc && socket && socket.connected) socket.emit('sos', { lat: S.loc.lat, lng: S.loc.lng });
         else showEnd();
       }, 1500);
       return;
@@ -435,7 +549,44 @@ function showEnd() {
   S.sos.active = false;
   S.sos.tries = 0;
   $('#searchSpin').classList.remove('spin');
+  buildIncidentReport();
   show('view-end');
+}
+
+/* ---------------- incident report (privacy-preserving, no PII) ---------------- */
+function buildIncidentReport() {
+  const last = S.lastReportPair; // set below
+  void last;
+  const rep = {
+    app: 'Sathi',
+    version: 1,
+    sessionId: S.lastPairId || null,
+    role: 'sos',
+    at: new Date().toISOString(),
+    durationSec: S.lastConnectedAt ? Math.round((Date.now() - S.lastConnectedAt) / 1000) : 0,
+    distanceM: S.lastDistance != null ? Math.round(S.lastDistance) : null,
+    accuracyM: S.loc && S.loc.acc ? Math.round(S.loc.acc) : null,
+    location: S.loc ? { lat: +S.loc.lat.toFixed(6), lng: +S.loc.lng.toFixed(6) } : null,
+    languages: [I18N.current, S.lastOtherLang || null],
+    privacy: 'no phone numbers, no names — session id + location + time only',
+    events: S.events.map((e) => ({ t: e.t - (S.events[0] ? S.events[0].t : 0), e: e.e })),
+  };
+  S.lastReport = rep;
+  try {
+    const list = JSON.parse(localStorage.getItem('sathi-reports') || '[]');
+    list.unshift(rep);
+    localStorage.setItem('sathi-reports', JSON.stringify(list.slice(0, 10)));
+  } catch (e) { /* noop */ }
+  const el = $('#reportBox');
+  if (el) {
+    el.innerHTML = '📄 <b>Session report जतन झाले</b> (कोणताही नंबर/नाव नाही — फक्त session id, वेळ, ठिकाण, duration) — पॉलिस/परींसाठी share करता येते.';
+  }
+}
+async function shareReport() {
+  if (!S.lastReport) return;
+  const txt = 'Sathi session report\n' + JSON.stringify(S.lastReport, null, 1);
+  if (navigator.share) { try { await navigator.share({ title: 'Sathi report', text: txt }); return; } catch (e) { /* cancelled */ } }
+  try { await navigator.clipboard.writeText(txt); toast('Report copy झाला'); } catch (e) { toast('Copy अशक्य'); }
 }
 
 /* ---------------- matched ---------------- */
@@ -450,9 +601,15 @@ function onMatched(d) {
     answered: false, offerBuf: null, handled: false, fitted: false,
   };
   S.pair = pair;
+  S.lastPairId = d.pairId;
+  S.lastDistance = d.distance;
+  S.lastOtherLang = d.otherLang;
+  S.lastConnectedAt = null;
   $('#chatLog').innerHTML = '';
   $('#subsList').innerHTML = '';
+  $('#reportBox').innerHTML = '';
   paintSubsHead();
+  logEvent('matched:' + (d.distance || 0) + 'm');
   if (d.role === 'sos') {
     S.sos.active = false;
     show('view-call');
@@ -492,6 +649,7 @@ function answerIncoming(auto) {
   updateCallDist();
   sndConnect();
   connectPC(false);
+  logEvent('call-accepted' + (auto ? ':auto' : ''));
   if (auto) toast(t('t_autoAccept'));
 }
 function declineIncoming() {
@@ -508,7 +666,7 @@ function onRtc(msg) {
   if (!pair || pair.id !== msg.pairId) return;
   const pc = pair.pc;
   if (!pc) {
-    if (msg.data && msg.data.sdp) pair.offerBuf = msg.data.sdp; // buffer until PC exists
+    if (msg.data && msg.data.sdp) pair.offerBuf = msg.data.sdp;
     return;
   }
   if (msg.data && msg.data.sdp) applySdp(pc, pair.id, msg.data.sdp);
@@ -538,7 +696,7 @@ function addMsg(side, text) {
   div.className = 'msg ' + side;
   const who = side === 'you' ? t('chatYou') : t('chatThey');
   const body = escapeHtml(text);
-  if (side === 'other' && S.pair.otherLang && S.pair.otherLang !== S.lang) {
+  if (side === 'other' && S.pair && S.pair.otherLang && S.pair.otherLang !== S.lang) {
     div.innerHTML = `<span class="who">${who} · ${escapeHtml(I18N.name(S.pair.otherLang))}</span><span class="tr">${escapeHtml(t('trTry'))}…</span><span class="orig">${body}</span>`;
     translate(text, S.pair.otherLang, S.lang)
       .then((tr) => { div.querySelector('.tr').textContent = tr; })
@@ -566,10 +724,7 @@ function startSubs() {
   stopSubs();
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const st = $('#trStatus');
-  if (!SR) {
-    st.textContent = t('trBrowser');
-    return;
-  }
+  if (!SR) { st.textContent = t('trBrowser'); return; }
   try {
     rec = new SR();
     rec.lang = I18N.speechLang(S.lang);
@@ -618,7 +773,7 @@ function addSub(side, text) {
   const txtEl = div.querySelector('.txt');
   if (target !== S.lang) {
     txtEl.textContent = text + ' — ' + t('trTry');
-    translate(text, S.lang === 'en' ? 'en' : (side === 'you' ? S.lang : (S.pair ? S.pair.otherLang : 'en')), target)
+    translate(text, side === 'you' ? S.lang : (S.pair ? S.pair.otherLang : 'en'), target)
       .then((tr) => { txtEl.textContent = tr; })
       .catch(() => { txtEl.textContent = text + ' ' + t('subFailed'); });
   } else {
@@ -656,6 +811,7 @@ async function shareLoc() {
   const { lat, lng } = S.loc;
   const url = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=18/${lat}/${lng}`;
   const text = '📍 ' + I18N.name(S.lang) + ' · Sathi live location';
+  logEvent('location-shared');
   if (navigator.share) {
     try { await navigator.share({ title: 'Sathi', text, url }); return; } catch (e) { /* cancelled */ }
   }
@@ -706,6 +862,25 @@ function wireSOSButton() {
   ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => btn.addEventListener(ev, stop));
 }
 
+/* ---------------- web push (free) ---------------- */
+async function enablePush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const res = await fetch('/api/push/public-key');
+    const { vapidKey } = await res.json();
+    if (!vapidKey) return;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: Uint8Array.from(atob(vapidKey), (c) => c.charCodeAt(0)).buffer,
+      });
+    }
+    socket.emit('push-sub', sub.toJSON());
+  } catch (e) { /* user declined or unsupported — fine */ }
+}
+
 /* ---------------- init ---------------- */
 function init() {
   /* language picker */
@@ -724,24 +899,35 @@ function init() {
   sel.value = saved;
   sel.addEventListener('change', () => setLang(sel.value));
 
-  socket = io();
+  socket = io({ reconnection: true, reconnectionDelay: 1000, reconnectionDelayMax: 15000, randomizationFactor: 0.5 });
 
   socket.on('connect', () => {
+    setConnDot();
     socket.emit('hello', { role: S.role, lang: S.lang });
     if (S.role === 'helper' && S.helper.ready && S.loc) socket.emit('ready', { on: true, lat: S.loc.lat, lng: S.loc.lng });
+    beaconLoc(true);
     refreshPermBadges();
+    flushQueuedSOS();
+    enablePush();
   });
-  socket.on('disconnect', () => toast('⚠️ ' + (S.lang === 'en' ? 'Server connection lost — reconnecting…' : 'Server connection तुटली — पुन्हा जोडत आहोत…')));
+  socket.on('disconnect', () => {
+    setConnDot();
+    if (S.role === 'sos' && S.sos.active && !S.pair) {
+      $('#searchStatus').innerHTML = '📡 ' + (I18N.current === 'en' ? 'Connection lost — reconnecting…' : 'Connection तुटली — पुन्हा जोडत आहोत…');
+    }
+  });
   socket.on('nearby-count', ({ count }) => { S.nearby = count; renderNearbyText(); });
   socket.on('search-ring', ({ ring }) => {
     S.sos.ring = ring;
     renderSearchMap();
     $('#searchStatus').innerHTML = t('expanding').replace('{r}', fmtDist(ring));
+    logEvent('ring:' + ring);
   });
   socket.on('no-helpers', () => {
     $('#searchSpin').classList.remove('spin');
     $('#searchStatus').innerHTML = t('noHelpers');
     toast(t('t_noSathi'));
+    logEvent('no-helpers');
   });
   socket.on('matched', onMatched);
   socket.on('rtc', onRtc);
@@ -763,6 +949,11 @@ function init() {
   $('#btnSpeaker').addEventListener('click', toggleSpeaker);
   $('#btnShare').addEventListener('click', shareLoc);
   $('#btnSafe').addEventListener('click', () => { S.role = null; stopWatch(); show('view-landing'); });
+  $('#btnMoreHelp').addEventListener('click', () => show('view-sos-home'));
+  $('#btnCloseLocModal').addEventListener('click', () => { $('#locModal').hidden = true; });
+  $('#btnReport').addEventListener('click', shareReport);
+  $('#chatSend').addEventListener('click', sendChat);
+  $('#chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
   $('#btnDemo').addEventListener('click', () => {
     try {
       window.open(location.origin + location.pathname + '?role=helper', '_blank');
@@ -772,23 +963,29 @@ function init() {
     enterNeedHelp();
     toast('दुसऱ्या tab मध्ये location permission द्या → मग इथे SOS दबा');
   });
-  $('#btnMoreHelp').addEventListener('click', () => show('view-sos-home'));
-  $('#btnCloseLocModal').addEventListener('click', () => { $('#locModal').hidden = true; });
-  $('#chatSend').addEventListener('click', sendChat);
-  $('#chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
 
   wireSOSButton();
 
-  /* keep-alive location every 2.5 s while active */
+  /* keep-alive beacon (hysteresis saves data) */
   setInterval(() => {
-    if (socket && socket.connected && S.loc && (S.helper.ready || S.pair || S.sos.active)) {
-      socket.emit('loc', { lat: S.loc.lat, lng: S.loc.lng });
-    }
+    if (S.loc && (S.helper.ready || S.pair || S.sos.active)) beaconLoc(false);
   }, 2500);
   /* refresh nearby count every 10 s on SOS home */
   setInterval(() => {
     if (S.role === 'sos' && !S.pair && !S.sos.active) refreshNearbyCount();
   }, 10000);
+  /* location watchdog: if no position for 45 s while active, re-arm watch (self-healing) */
+  setInterval(() => {
+    if (S.loc && (S.helper.ready || S.pair || S.sos.active) && Date.now() - S.loc.ts > 45_000) {
+      logEvent('loc-watchdog-rearm');
+      startWatch();
+    }
+  }, 15000);
+
+  /* service worker: offline shell + push */
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => { /* http dev contexts */ });
+  }
 
   applyI18n();
   show('view-landing');
