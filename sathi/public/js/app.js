@@ -763,6 +763,15 @@ function init() {
   $('#btnSpeaker').addEventListener('click', toggleSpeaker);
   $('#btnShare').addEventListener('click', shareLoc);
   $('#btnSafe').addEventListener('click', () => { S.role = null; stopWatch(); show('view-landing'); });
+  $('#btnDemo').addEventListener('click', () => {
+    try {
+      window.open(location.origin + location.pathname + '?role=helper', '_blank');
+    } catch (e) {
+      toast('Popup block झाला — नवीन tab मध्ये उघडा: ' + location.origin + location.pathname + '?role=helper');
+    }
+    enterNeedHelp();
+    toast('दुसऱ्या tab मध्ये location permission द्या → मग इथे SOS दबा');
+  });
   $('#btnMoreHelp').addEventListener('click', () => show('view-sos-home'));
   $('#btnCloseLocModal').addEventListener('click', () => { $('#locModal').hidden = true; });
   $('#chatSend').addEventListener('click', sendChat);
@@ -783,6 +792,13 @@ function init() {
 
   applyI18n();
   show('view-landing');
+
+  /* auto role from URL — used by the 1-click demo (helper tab) */
+  try {
+    const p = new URLSearchParams(location.search).get('role');
+    if (p === 'helper') setTimeout(() => { enterHelpReady(); toast('🟢 ही tab = साथी (मदत करणारा) मोड'); }, 700);
+    else if (p === 'sos') setTimeout(() => { enterNeedHelp(); toast('🆘 ही tab = SOS मोड'); }, 700);
+  } catch (e) { /* noop */ }
 }
 document.addEventListener('DOMContentLoaded', init);
 })();
