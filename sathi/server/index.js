@@ -93,6 +93,7 @@ io.on('connection', (socket) => {
 
   socket.on('hello', (data) => {
     if (data && (data.role === 'sos' || data.role === 'helper')) socket.data.role = data.role;
+    if (data && typeof data.lang === 'string' && data.lang) socket.data.lang = data.lang.slice(0, 8);
   });
 
   socket.on('loc', (data) => {
@@ -160,12 +161,14 @@ io.on('connection', (socket) => {
       role: 'sos',
       distance: pair.distance,
       otherLabel: 'Sathi #' + (1000 + Math.floor(Math.random() * 9000)),
+      otherLang: (io.sockets.sockets.get(pick.sid) || {}).data?.lang || 'en',
     });
     io.to(pick.sid).emit('matched', {
       pairId,
       role: 'helper',
       distance: pair.distance,
       sos: { lat: data.lat, lng: data.lng },
+      otherLang: socket.data.lang || 'en',
     });
   });
 
@@ -177,6 +180,25 @@ io.on('connection', (socket) => {
       pair.helperSid === socket.id ? pair.sosSid : null;
     if (other) io.to(other).emit('rtc', { pairId: pair.pairId, data: msg.data });
   });
+
+  // relay translated-agnostic text: chat + live voice subtitles
+  for (const ev of ['chat', 'speech']) {
+    socket.on(ev, (msg) => {
+      const pair = pairs.get(msg && msg.pairId);
+      if (!pair) return;
+      const other =
+        pair.sosSid === socket.id ? pair.helperSid :
+        pair.helperSid === socket.id ? pair.sosSid : null;
+      if (!other) return;
+      const text = typeof msg.text === 'string' ? msg.text.slice(0, 500) : '';
+      if (!text.trim()) return;
+      io.to(other).emit(ev, {
+        pairId: pair.pairId,
+        text,
+        from: pair.sosSid === socket.id ? 'sos' : 'helper',
+      });
+    });
+  }
 
   socket.on('decline', (msg) => {
     if (msg && msg.pairId) dissolve(msg.pairId, 'declined');

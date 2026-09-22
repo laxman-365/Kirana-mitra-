@@ -36,6 +36,16 @@ b { color: #fff; }
   .phone { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }
 
+/* per-language script fonts (all Google Fonts, free) */
+body[data-lang='bn'], body[data-lang='as'], body[data-lang='mni'] { font-family: 'Noto Sans Bengali', 'Noto Sans Devanagari', system-ui, sans-serif; }
+body[data-lang='ta'] { font-family: 'Noto Serif Tamil', system-ui, sans-serif; }
+body[data-lang='te'] { font-family: 'Noto Serif Telugu', system-ui, sans-serif; }
+body[data-lang='kn'] { font-family: 'Noto Serif Kannada', system-ui, sans-serif; }
+body[data-lang='ml'] { font-family: 'Noto Sans Malayalam', system-ui, sans-serif; }
+body[data-lang='or'] { font-family: 'Noto Sans Oriya', system-ui, sans-serif; }
+body[data-lang='pa'], body[data-lang='doi'] { font-family: 'Noto Sans Gurmukhi', system-ui, sans-serif; }
+body[data-lang='ur'], body[data-lang='sd'] { font-family: 'Noto Nastaliq Urdu', system-ui, sans-serif; }
+
 /* ---------- top bar ---------- */
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
@@ -213,6 +223,39 @@ main { flex: 1; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
 .call-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .call-who { font-size: 16px; font-weight: 800; line-height: 1.35; }
 .call-meta { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
+/* ---------- language picker ---------- */
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.langsel {
+  background: var(--card2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 10px; padding: 6px 8px; font-family: inherit; font-size: 12.5px;
+  max-width: 118px; cursor: pointer;
+}
+
+/* ---------- live subtitles ---------- */
+.subs { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 10px 0; }
+.subs-head { font-size: 12px; font-weight: 700; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.subs-list { display: flex; flex-direction: column; gap: 6px; max-height: 130px; overflow-y: auto; }
+.sub-line { font-size: 13px; line-height: 1.45; }
+.sub-line .who { color: var(--muted); font-size: 10.5px; font-weight: 700; display: block; }
+.sub-line.you .txt { color: #9ecbff; }
+.sub-line.other .txt { color: #ffd9a0; }
+
+/* ---------- translated chat ---------- */
+.chatbox { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; margin: 10px 0; }
+.chat-log { max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.msg { font-size: 13px; line-height: 1.4; max-width: 88%; padding: 7px 10px; border-radius: 12px; word-break: break-word; }
+.msg .who { font-size: 10.5px; font-weight: 800; color: var(--muted); display: block; margin-bottom: 1px; }
+.msg.you { align-self: flex-end; background: #17324d; border: 1px solid #24507a; }
+.msg.other { align-self: flex-start; background: #3a2a10; border: 1px solid #5a4413; }
+.msg .orig { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; font-style: italic; }
+.msg .tr.trbad { color: var(--muted); font-style: italic; }
+.chat-row { display: flex; gap: 8px; }
+.chat-row input {
+  flex: 1; background: var(--bg2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 10px; padding: 10px 12px; font-family: inherit; font-size: 14px; min-width: 0;
+}
+.chat-send { border: none; background: var(--blue); color: #fff; width: 44px; border-radius: 10px; font-size: 18px; cursor: pointer; }
 .call-controls { display: flex; gap: 10px; justify-content: center; margin: 14px 0 4px; }
 .cbtn {
   width: 68px; height: 68px; border-radius: 50%; border: 1px solid var(--line);

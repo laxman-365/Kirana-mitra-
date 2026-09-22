@@ -28,6 +28,16 @@ quickly, and may not even know emergency numbers. That gap causes harm.
 6. **Sathi (volunteer) mode** — open the app, tap “I'm ready to help”, and
    you join the 500 m help pool. When someone near you presses SOS, the app
    calls you (with a countdown so you can accept immediately or decline).
+7. **23 भाषा / 23 languages** (8th Schedule + English) — full UI in
+   Marathi, Hindi, Gujarati, English; critical SOS strings in all 19 others.
+8. **In-call language translation** — translated chat (type in your language,
+   the other side reads theirs, via free MyMemory + English bridge) and live
+   voice subtitles (Web Speech API, where the browser supports the language).
+   Example: मराठीत बोला/लिहा → त्यांना ગુજરાતીत; उलटही.
+
+> 🔎 **पूर्ण माहिती व प्रश्न-उत्तरे (trust doc):** [QUESTIONS_ANSWERS.md](./QUESTIONS_ANSWERS.md)
+> satellite/GPS, free cost, hosting without paid APIs, data usage, WebRTC,
+> map, translation, privacy — सर्व तपशील देवनागरी मराठीत.
 
 ## Run it (सुरू कसे करावे)
 
@@ -56,10 +66,11 @@ npm test
 
 | Layer | Tech |
 |---|---|
-| Server | Node.js + Express + **Socket.IO** (presence pool, matching, signalling relay) |
+| Server | Node.js + Express + **Socket.IO** (presence pool, matching, signalling relay, language + chat/speech relay) |
 | Voice call | **WebRTC** (RTCPeerConnection), STUN only — anonymous, no numbers |
 | Map | **Leaflet** + OpenStreetMap tiles (no API key) |
-| UI | Vanilla JS, mobile-first, Marathi (Devanagari) + English |
+| UI | Vanilla JS, mobile-first, **23-language i18n** (4 full + 19 critical) |
+| Translation | **MyMemory free API** (+ English bridge, cached) for chat/subtitles; **Web Speech API** for local speech-to-text |
 
 ### Matching rules (server)
 

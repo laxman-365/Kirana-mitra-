@@ -1,11 +1,15 @@
 /* ============================================================
    Sathi (साथी) — client app
    SOS → random nearby helper within 500 m → anonymous in-app
-   voice call (WebRTC) → mutual live location on map.
+   voice call (WebRTC) → mutual live location on map →
+   in-call translated chat + live voice subtitles.
    No phone numbers or identities exist anywhere in this app.
    ============================================================ */
 (() => {
 'use strict';
+
+const I18N = window.I18N;
+const t = (k) => I18N.t(k);
 
 /* ---------------- utils ---------------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -19,14 +23,16 @@ function haversineM(lat1, lon1, lat2, lon2) {
 }
 const fmtDist = (m) => (m == null ? '—' : m < 950 ? Math.round(m) + ' m' : (m / 1000).toFixed(1) + ' km');
 const fmtClock = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 function toast(msg, ms = 3000) {
-  const t = document.createElement('div');
-  t.className = 'toast';
-  t.innerHTML = msg;
-  $('#toasts').appendChild(t);
-  requestAnimationFrame(() => t.classList.add('show'));
-  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 350); }, ms);
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = msg;
+  $('#toasts').appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 350); }, ms);
 }
 function vibrate(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* noop */ } }
 
@@ -53,14 +59,16 @@ const sndAlert = () => { tone(700, 0.18); tone(700, 0.18, 0.32); tone(700, 0.18,
 /* ---------------- state ---------------- */
 const S = {
   role: null,            // 'sos' | 'helper'
+  lang: 'mr',
   loc: null,             // {lat,lng,ts}
   watchId: null,
-  pendingLocCb: null,    // action to run once location is known
+  pendingLocCb: null,
+  nearby: null,
   sos: { active: false, tries: 0, ring: 500 },
-  pair: null,            // {id, role, otherLabel, otherLoc, pc, stream, connectedAt, timerId, answered, offerBuf, handled, fitted}
+  pair: null,            // {id, role, otherLabel, otherLang, otherLoc, pc, stream, connectedAt, timerId, answered, offerBuf, handled, fitted}
   helper: { ready: false, countdown: null },
   speakerOn: false,
-  maps: {},              // containerId -> {m, self, other, circle, fitted}
+  maps: {},
 };
 let socket = null;
 
@@ -68,13 +76,74 @@ const TILES = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const iconSelf = L.divIcon({ className: '', html: '<div class="mk-self"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
 const iconOther = L.divIcon({ className: '', html: '<div class="mk-other"></div>', iconSize: [20, 20], iconAnchor: [10, 10] });
 
+/* ---------------- translation (free: MyMemory + en bridge) ---------------- */
+const trCache = new Map();
+async function mymemory(text, from, to) {
+  try {
+    const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text) + '&langpair=' + from + '|' + to;
+    const ctrl = new AbortController();
+    const to2 = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(to2);
+    const j = await res.json();
+    const out = j && j.responseData && j.responseData.translatedText;
+    if (out && !/^(INVALID|NO QUERY|QUERY IS TOO LONG|PLEASE SELECT|PLEASE ENTER THE)/i.test(out)) return out;
+    return null;
+  } catch (e) { return null; }
+}
+async function translate(text, from, to) {
+  text = String(text).trim().slice(0, 500);
+  if (!text) throw new Error('empty');
+  if (!from || !to || from === to) return text;
+  const key = from + '|' + to + '|' + text;
+  if (trCache.has(key)) return trCache.get(key);
+  let out = await mymemory(text, from, to);
+  if (!out) {
+    // bridge via English when the direct pair is unsupported
+    const a = await mymemory(text, from, 'en');
+    if (a) out = await mymemory(a, 'en', to);
+  }
+  if (!out) throw new Error('no translation');
+  trCache.set(key, out);
+  return out;
+}
+
+/* ---------------- i18n application ---------------- */
+function applyI18n() {
+  $$('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  $$('[data-i18n-html]').forEach((el) => { el.innerHTML = t(el.dataset.i18nHtml); });
+  $$('[data-i18n-ph]').forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
+  $$('[data-en]').forEach((el) => { el.textContent = I18N.tEn(el.dataset.en); });
+  document.documentElement.lang = S.lang;
+  document.body.dataset.lang = S.lang;
+  const b = $('#roleBadge');
+  if (S.role === 'sos') b.textContent = t('sosActive');
+  else if (S.role === 'helper') b.textContent = t('helperActive');
+  if (S.pair) {
+    setCallWho();
+    const cs = $('#callState');
+    if (cs) { cs.textContent = S.pair.connectedAt ? t('live') : t('connecting'); cs.className = 'chip ' + (S.pair.connectedAt ? 'ok' : 'warn'); }
+    paintSubsHead();
+  }
+  updateCallDist();
+  renderNearbyText();
+}
+function setLang(code) {
+  S.lang = code;
+  I18N.current = code;
+  try { localStorage.setItem('sathi-lang', code); } catch (e) { /* noop */ }
+  if (socket && socket.connected) socket.emit('hello', { role: S.role, lang: code });
+  applyI18n();
+}
+
 /* ---------------- views ---------------- */
 function show(id) {
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === id));
   const b = $('#roleBadge');
-  if (S.role === 'sos') { b.hidden = false; b.textContent = 'SOS mode'; b.classList.remove('green'); }
-  else if (S.role === 'helper') { b.hidden = false; b.textContent = 'सथी mode'; b.classList.add('green'); }
+  if (S.role === 'sos') { b.hidden = false; b.textContent = t('sosActive'); b.classList.remove('green'); }
+  else if (S.role === 'helper') { b.hidden = false; b.textContent = t('helperActive'); b.classList.add('green'); }
   else b.hidden = true;
+  $('#subs').hidden = (id !== 'view-call');
   requestAnimationFrame(() => { renderActiveMaps(); });
 }
 
@@ -106,7 +175,6 @@ function ringCircle(h, lat, lng, radius, color) {
   if (!h.circle) h.circle = L.circle([lat, lng], { radius, color, weight: 1.5, dashArray: '6 6', fillColor: color, fillOpacity: 0.07 }).addTo(h.m);
   else { h.circle.setLatLng([lat, lng]); h.circle.setRadius(radius); }
 }
-
 function renderSearchMap() {
   if (!$('#view-sos-search').classList.contains('active')) return;
   const h = mapBase($('#mapSearch'));
@@ -154,8 +222,19 @@ function pairDist() {
   return null;
 }
 function updateCallDist() {
-  const d = pairDist();
-  $('#callDist').textContent = 'अंतर: ' + fmtDist(d);
+  const el = $('#callDist');
+  if (!el) return;
+  el.textContent = t('distance') + ': ' + fmtDist(pairDist());
+}
+
+/* ---------------- nearby count ---------------- */
+function refreshNearbyCount() {
+  if (socket && socket.connected && S.loc) socket.emit('nearby-count', { lat: S.loc.lat, lng: S.loc.lng });
+}
+function renderNearbyText() {
+  const el1 = $('#nearbyCount'), el2 = $('#searchNearby');
+  if (el1) el1.innerHTML = S.nearby == null ? t('nearby0') : t('nearbyN').replace('{n}', S.nearby);
+  if (el2 && S.nearby != null) el2.innerHTML = '🤝 <b>' + S.nearby + '</b>';
 }
 
 /* ---------------- location ---------------- */
@@ -174,7 +253,6 @@ function onLoc(lat, lng) {
   if (socket && socket.connected) socket.emit('loc', { lat, lng });
   renderActiveMaps();
   updateCallDist();
-  $('#nearbyCount') && $('#nearbyCount'); // (no-op) keep refs warm
   refreshNearbyCount();
   if (S.pendingLocCb) { const cb = S.pendingLocCb; S.pendingLocCb = null; cb(); }
 }
@@ -190,29 +268,19 @@ function openLocModal() {
   }
 }
 
-/* ---------------- nearby count ---------------- */
-function refreshNearbyCount() {
-  if (socket && socket.connected && S.loc) socket.emit('nearby-count', { lat: S.loc.lat, lng: S.loc.lng });
-}
-function setNearbyText(n) {
-  const el1 = $('#nearbyCount'), el2 = $('#searchNearby');
-  const txt = n ? `जवळपास <b>${n}</b> सथी तयार 🤝` : 'सध्या जवळपास सथी नाहीत';
-  if (el1) el1.innerHTML = txt;
-  if (el2) el2.innerHTML = 'जवळचे सथी: <b>' + (n || 0) + '</b>';
-}
-
 /* ---------------- roles ---------------- */
 function enterNeedHelp() {
   S.role = 'sos';
-  if (socket) socket.emit('hello', { role: 'sos' });
+  if (socket) socket.emit('hello', { role: 'sos', lang: S.lang });
   startWatch();
   show('view-sos-home');
   refreshPermBadges();
+  renderNearbyText();
 }
 function enterHelpReady() {
   if (S.helper.ready) return;
   S.role = 'helper';
-  if (socket) socket.emit('hello', { role: 'helper' });
+  if (socket) socket.emit('hello', { role: 'helper', lang: S.lang });
   startWatch();
   if (S.loc) activateHelper();
   else S.pendingLocCb = () => { if (!S.helper.ready) activateHelper(); };
@@ -222,7 +290,7 @@ function activateHelper() {
   S.helper.ready = true;
   socket.emit('ready', { on: true, lat: S.loc.lat, lng: S.loc.lng });
   show('view-helper-ready');
-  toast('🟢 तुम्ही सथी — जवळचा SOS तुम्हाला येईल');
+  toast(t('t_sathiReady'));
 }
 function stopHelper() {
   S.helper.ready = false;
@@ -239,7 +307,7 @@ function fireSOS() {
   S.sos.ring = 500;
   S.sos.tries = 1;
   show('view-sos-search');
-  $('#searchStatus').innerHTML = 'जवळपास <b>500 m</b> मधून सथी शोधत आहोत… <span class="en">Searching for a sathi within 500 m…</span>';
+  $('#searchStatus').innerHTML = t('searching');
   $('#searchSpin').classList.add('spin');
   socket.emit('sos', { lat: S.loc.lat, lng: S.loc.lng });
   vibrate(150);
@@ -250,10 +318,20 @@ function cancelSOS() {
   S.sos.active = false;
   $('#searchSpin').classList.remove('spin');
   show('view-sos-home');
-  toast('SOS रद्द झाला');
+  toast(t('t_sosCancel'));
 }
 
 /* ---------------- call (WebRTC) ---------------- */
+function setCallWho() {
+  if (!S.pair) return;
+  $('#callWho').innerHTML = S.pair.role === 'sos'
+    ? t('callWhoSos').replace('{l}', escapeHtml(S.pair.otherLabel))
+    : t('callWhoHelper');
+}
+function paintSubsHead() {
+  const el = $('#subsLang');
+  if (el && S.pair) el.textContent = I18N.name(S.lang) + ' ⇄ ' + I18N.name(S.pair.otherLang);
+}
 async function connectPC(offerer) {
   const pair = S.pair; if (!pair) return;
   const pc = new RTCPeerConnection({
@@ -263,9 +341,9 @@ async function connectPC(offerer) {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     pair.stream = stream;
-    stream.getAudioTracks().forEach((t) => pc.addTrack(t, stream));
+    stream.getAudioTracks().forEach((tr) => pc.addTrack(tr, stream));
   } catch (e) {
-    toast('🎙 Mic permission नाही — कॉल silent असेल');
+    toast(t('t_noMic'));
   }
   pc.onicecandidate = (e) => { if (e.candidate) socket.emit('rtc', { pairId: pair.id, data: { candidate: e.candidate } }); };
   pc.onconnectionstatechange = () => {
@@ -273,9 +351,9 @@ async function connectPC(offerer) {
     const el = $('#callState');
     if (st === 'connected' && !pair.connectedAt) {
       pair.connectedAt = Date.now();
-      el.textContent = 'कॉल live ✓'; el.className = 'chip ok';
+      el.textContent = t('live'); el.className = 'chip ok';
       pair.timerId = setInterval(() => { $('#callTimer').textContent = fmtClock((Date.now() - pair.connectedAt) / 1000); }, 1000);
-    } else if (st === 'failed') { el.textContent = 'Connection problem'; el.className = 'chip warn'; }
+    } else if (st === 'failed') { el.textContent = t('failed'); el.className = 'chip warn'; }
   };
   pc.ontrack = (e) => {
     const audio = $('#remoteAudio');
@@ -290,6 +368,7 @@ async function connectPC(offerer) {
     const b = pair.offerBuf; pair.offerBuf = null;
     applySdp(pc, pair.id, b);
   }
+  startSubs();
 }
 async function applySdp(pc, pairId, sdp) {
   try {
@@ -306,9 +385,12 @@ async function applySdp(pc, pairId, sdp) {
 function teardownCall() {
   const p = S.pair; if (!p) return;
   clearInterval(p.timerId);
+  stopSubs();
   if (p.pc) { try { p.pc.close(); } catch (e) { /* noop */ } }
-  if (p.stream) p.stream.getTracks().forEach((t) => t.stop());
+  if (p.stream) p.stream.getTracks().forEach((tr) => tr.stop());
   $('#remoteAudio').srcObject = null;
+  $('#subs').hidden = true;
+  $('#chatInput').value = '';
   S.pair = null;
 }
 function hangUp() {
@@ -319,9 +401,9 @@ function hangUp() {
   teardownCall();
   if (role === 'sos') showEnd();
   else {
-    if (S.helper.ready) { show('view-helper-ready'); }
+    if (S.helper.ready) show('view-helper-ready');
     else show('view-landing');
-    toast('Session समाप्त — तुम्ही पुन्हा तयार आहात');
+    toast(t('t_sessionEnd'));
   }
 }
 function onPairOver(info) {
@@ -334,10 +416,10 @@ function onPairOver(info) {
       S.sos.tries++;
       show('view-sos-search');
       $('#searchSpin').classList.add('spin');
-      $('#searchStatus').innerHTML = 'पिळता येत नव्हता — <b>पुन्हा शोधत आहोत…</b> <span class="en">Retrying…</span>';
-      toast('सथी कॉल घेऊ शकला नाही — पुन्हा प्रयत्न…');
+      $('#searchStatus').innerHTML = t('t_retry');
+      toast(t('t_retry'));
       setTimeout(() => {
-        if (S.sos.tries < 3 && S.loc) { socket.emit('sos', { lat: S.loc.lat, lng: S.loc.lng }); }
+        if (S.sos.tries < 3 && S.loc) socket.emit('sos', { lat: S.loc.lat, lng: S.loc.lng });
         else showEnd();
       }, 1500);
       return;
@@ -346,7 +428,7 @@ function onPairOver(info) {
   } else {
     if (S.helper.ready) show('view-helper-ready');
     else show('view-landing');
-    toast('Session समाप्त — तुम्ही पुन्हा तयार आहात');
+    toast(t('t_sessionEnd'));
   }
 }
 function showEnd() {
@@ -358,27 +440,29 @@ function showEnd() {
 
 /* ---------------- matched ---------------- */
 function onMatched(d) {
+  const pair = {
+    id: d.pairId,
+    role: d.role,
+    otherLabel: d.otherLabel || 'Sathi',
+    otherLang: d.otherLang || 'en',
+    otherLoc: d.sos ? { lat: d.sos.lat, lng: d.sos.lng, ts: Date.now() } : null,
+    pc: null, stream: null, connectedAt: null, timerId: null,
+    answered: false, offerBuf: null, handled: false, fitted: false,
+  };
+  S.pair = pair;
+  $('#chatLog').innerHTML = '';
+  $('#subsList').innerHTML = '';
+  paintSubsHead();
   if (d.role === 'sos') {
     S.sos.active = false;
-    S.pair = {
-      id: d.pairId, role: 'sos', otherLabel: d.otherLabel,
-      otherLoc: null, pc: null, stream: null, connectedAt: null,
-      timerId: null, answered: false, offerBuf: null, handled: false, fitted: false,
-    };
     show('view-call');
-    $('#callWho').innerHTML = `🆘 <b>${d.otherLabel}</b> तुम्हाला मदत करायला येतोय <span class="en">Your sathi is on the way (~${fmtDist(d.distance)})</span>`;
-    $('#callState').textContent = 'कॉल जोडत आहोत…'; $('#callState').className = 'chip warn';
+    setCallWho();
+    $('#callState').textContent = t('connecting'); $('#callState').className = 'chip warn';
     $('#callTimer').textContent = '00:00';
-    $('#callDist').textContent = 'अंतर: ~' + fmtDist(d.distance);
+    $('#callDist').textContent = t('distance') + ': ~' + fmtDist(d.distance);
     sndConnect();
     connectPC(true);
   } else {
-    S.pair = {
-      id: d.pairId, role: 'helper', otherLabel: 'SOS',
-      otherLoc: d.sos ? { lat: d.sos.lat, lng: d.sos.lng, ts: Date.now() } : null,
-      pc: null, stream: null, connectedAt: null,
-      timerId: null, answered: false, offerBuf: null, handled: false, fitted: false,
-    };
     show('view-incoming');
     $('#incDist').textContent = '~' + fmtDist(d.distance);
     $('#incCount').textContent = '5';
@@ -402,23 +486,23 @@ function answerIncoming(auto) {
   S.pair.answered = true;
   clearInterval(S.helper.countdown);
   show('view-call');
-  $('#callWho').innerHTML = `🆘 <b>SOS</b> — जवळपास मदतीसाठी <span class="en">Anonymous SOS nearby</span>`;
-  $('#callState').textContent = 'कॉल जोडत आहोत…'; $('#callState').className = 'chip warn';
+  setCallWho();
+  $('#callState').textContent = t('connecting'); $('#callState').className = 'chip warn';
   $('#callTimer').textContent = '00:00';
   updateCallDist();
   sndConnect();
   connectPC(false);
-  if (auto) toast('कॉल auto-accept झाला');
+  if (auto) toast(t('t_autoAccept'));
 }
 function declineIncoming() {
   clearInterval(S.helper.countdown);
   if (S.pair) socket.emit('decline', { pairId: S.pair.id });
   S.pair = null;
   if (S.helper.ready) show('view-helper-ready'); else show('view-landing');
-  toast('लावले नाही — दुसरा सथी शोधला जातोय');
+  toast(t('t_cannotTake'));
 }
 
-/* ---------------- rtc events ---------------- */
+/* ---------------- rtc / peer events ---------------- */
 function onRtc(msg) {
   const pair = S.pair;
   if (!pair || pair.id !== msg.pairId) return;
@@ -437,6 +521,110 @@ function onPeerLoc(d) {
   S.pair.otherLoc = d;
   updateCallDist();
   renderActiveMaps();
+}
+
+/* ---------------- in-call translated chat ---------------- */
+function sendChat() {
+  const inp = $('#chatInput');
+  const text = inp.value.trim();
+  if (!text || !S.pair) return;
+  inp.value = '';
+  socket.emit('chat', { pairId: S.pair.id, text });
+  addMsg('you', text);
+}
+function addMsg(side, text) {
+  const log = $('#chatLog');
+  const div = document.createElement('div');
+  div.className = 'msg ' + side;
+  const who = side === 'you' ? t('chatYou') : t('chatThey');
+  const body = escapeHtml(text);
+  if (side === 'other' && S.pair.otherLang && S.pair.otherLang !== S.lang) {
+    div.innerHTML = `<span class="who">${who} · ${escapeHtml(I18N.name(S.pair.otherLang))}</span><span class="tr">${escapeHtml(t('trTry'))}…</span><span class="orig">${body}</span>`;
+    translate(text, S.pair.otherLang, S.lang)
+      .then((tr) => { div.querySelector('.tr').textContent = tr; })
+      .catch(() => { const el2 = div.querySelector('.tr'); el2.classList.add('trbad'); el2.textContent = t('subFailed'); });
+  } else if (side === 'you') {
+    div.innerHTML = `<span class="who">${who}</span><span class="tr">${body}</span>`;
+    if (S.pair && S.pair.otherLang && S.pair.otherLang !== S.lang) {
+      translate(text, S.lang, S.pair.otherLang).then((tr) => {
+        const o = document.createElement('span');
+        o.className = 'orig';
+        o.textContent = '→ ' + tr;
+        div.appendChild(o);
+      }).catch(() => { /* noop */ });
+    }
+  } else {
+    div.innerHTML = `<span class="who">${who}</span><span class="tr">${body}</span>`;
+  }
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+/* ---------------- live voice subtitles ---------------- */
+let rec = null;
+function startSubs() {
+  stopSubs();
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const st = $('#trStatus');
+  if (!SR) {
+    st.textContent = t('trBrowser');
+    return;
+  }
+  try {
+    rec = new SR();
+    rec.lang = I18N.speechLang(S.lang);
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    st.textContent = t('trTry');
+    rec.onresult = (e) => {
+      let text = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) text += (text ? ' ' : '') + e.results[i][0].transcript;
+      }
+      text = text.trim();
+      if (!text || !S.pair || !S.pair.id) return;
+      socket.emit('speech', { pairId: S.pair.id, text });
+      addSub('you', text);
+    };
+    rec.onerror = (e) => {
+      if (e.error === 'not-allowed') st.textContent = t('trOff') + ' · mic';
+    };
+    rec.onend = () => {
+      if (S.pair && S.pair.pc) { try { rec.start(); } catch (e2) { /* already running */ } }
+    };
+    rec.start();
+    st.textContent = t('trOn');
+  } catch (e) {
+    st.textContent = t('trBrowser');
+  }
+}
+function stopSubs() {
+  if (rec) {
+    const r = rec; rec = null;
+    r.onend = null; r.onerror = null; r.onresult = null;
+    try { r.stop(); } catch (e) { /* noop */ }
+  }
+}
+function addSub(side, text) {
+  const list = $('#subsList');
+  const div = document.createElement('div');
+  div.className = 'sub-line ' + (side === 'you' ? 'you' : 'other');
+  const who = side === 'you' ? t('subYou') : t('subThey');
+  const target = side === 'you' ? (S.pair ? S.pair.otherLang : 'en') : S.lang;
+  div.innerHTML = `<span class="who">${who} · ${escapeHtml(I18N.name(target))}</span><span class="txt"></span>`;
+  list.appendChild(div);
+  while (list.children.length > 5) list.removeChild(list.firstChild);
+  const txtEl = div.querySelector('.txt');
+  if (target !== S.lang) {
+    txtEl.textContent = text + ' — ' + t('trTry');
+    translate(text, S.lang === 'en' ? 'en' : (side === 'you' ? S.lang : (S.pair ? S.pair.otherLang : 'en')), target)
+      .then((tr) => { txtEl.textContent = tr; })
+      .catch(() => { txtEl.textContent = text + ' ' + t('subFailed'); });
+  } else {
+    txtEl.textContent = text;
+  }
+  list.scrollTop = list.scrollHeight;
 }
 
 /* ---------------- permissions badges ---------------- */
@@ -467,18 +655,18 @@ async function shareLoc() {
   if (!S.loc) return;
   const { lat, lng } = S.loc;
   const url = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=18/${lat}/${lng}`;
-  const text = 'मी इथे आहे — माझे live location (Sathi App)';
+  const text = '📍 ' + I18N.name(S.lang) + ' · Sathi live location';
   if (navigator.share) {
     try { await navigator.share({ title: 'Sathi', text, url }); return; } catch (e) { /* cancelled */ }
   }
-  try { await navigator.clipboard.writeText(url); toast('📍 Location link copy झाला — पॉलिस/परीकडे पाठवा'); }
+  try { await navigator.clipboard.writeText(url); toast(t('t_copied')); }
   catch (e) { toast(url); }
 }
 async function toggleSpeaker() {
   try {
     const a = $('#remoteAudio');
     if (!a.setSinkId || !navigator.mediaDevices || !navigator.mediaDevices.getOutputDevices) {
-      toast('या browser मध्ये speaker बदलता येत नाही');
+      toast(t('t_spkNo'));
       return;
     }
     const devs = await navigator.mediaDevices.getOutputDevices();
@@ -487,15 +675,15 @@ async function toggleSpeaker() {
     else await a.setSinkId(spk ? spk.deviceId : 'default');
     S.speakerOn = !S.speakerOn;
     $('#btnSpeaker').classList.toggle('on', S.speakerOn);
-    toast(S.speakerOn ? '🔊 Speaker on' : '🔉 Receiver');
-  } catch (e) { toast('Speaker बदलता आला नाही'); }
+    toast(S.speakerOn ? t('t_spkOn') : t('t_spkOff'));
+  } catch (e) { toast(t('t_spkNo')); }
 }
 function toggleMute() {
-  const t = S.pair && S.pair.stream && S.pair.stream.getAudioTracks()[0];
-  if (!t) return;
-  t.enabled = !t.enabled;
-  $('#btnMute').classList.toggle('on', !t.enabled);
-  toast(t.enabled ? '🎙 Mic on' : '🔇 Mic muted');
+  const tr = S.pair && S.pair.stream && S.pair.stream.getAudioTracks()[0];
+  if (!tr) return;
+  tr.enabled = !tr.enabled;
+  $('#btnMute').classList.toggle('on', !tr.enabled);
+  toast(tr.enabled ? t('t_muteOn') : t('t_muteOff'));
 }
 
 /* ---------------- SOS hold button ---------------- */
@@ -520,29 +708,47 @@ function wireSOSButton() {
 
 /* ---------------- init ---------------- */
 function init() {
+  /* language picker */
+  const sel = $('#langSel');
+  I18N.LANGS.forEach((l) => {
+    const o = document.createElement('option');
+    o.value = l.code;
+    o.textContent = l.name;
+    sel.appendChild(o);
+  });
+  let saved = 'mr';
+  try { saved = localStorage.getItem('sathi-lang') || 'mr'; } catch (e) { /* noop */ }
+  if (!I18N.LANGS.some((l) => l.code === saved)) saved = 'mr';
+  S.lang = saved;
+  I18N.current = saved;
+  sel.value = saved;
+  sel.addEventListener('change', () => setLang(sel.value));
+
   socket = io();
 
   socket.on('connect', () => {
-    if (S.role) socket.emit('hello', { role: S.role });
+    socket.emit('hello', { role: S.role, lang: S.lang });
     if (S.role === 'helper' && S.helper.ready && S.loc) socket.emit('ready', { on: true, lat: S.loc.lat, lng: S.loc.lng });
     refreshPermBadges();
   });
-  socket.on('disconnect', () => toast('⚠️ Server connection तुटली — पुन्हा जोडत आहोत…'));
-  socket.on('nearby-count', ({ count }) => setNearbyText(count));
+  socket.on('disconnect', () => toast('⚠️ ' + (S.lang === 'en' ? 'Server connection lost — reconnecting…' : 'Server connection तुटली — पुन्हा जोडत आहोत…')));
+  socket.on('nearby-count', ({ count }) => { S.nearby = count; renderNearbyText(); });
   socket.on('search-ring', ({ ring }) => {
     S.sos.ring = ring;
     renderSearchMap();
-    $('#searchStatus').innerHTML = `500 m मध्ये नव्हते — आता <b>${fmtDist(ring)}</b> पर्यंत शोधत आहोत… <span class="en">Expanding search…</span>`;
+    $('#searchStatus').innerHTML = t('expanding').replace('{r}', fmtDist(ring));
   });
   socket.on('no-helpers', () => {
     $('#searchSpin').classList.remove('spin');
-    $('#searchStatus').innerHTML = 'जवळपास सध्या सथी उपलब्ध नाहीत. कृपया थेट <b>112</b> ला कॉल करा. <span class="en">No sathi nearby right now.</span>';
-    toast('जवळचे सथी उपलब्ध नाहीत — 112 वापरा');
+    $('#searchStatus').innerHTML = t('noHelpers');
+    toast(t('t_noSathi'));
   });
   socket.on('matched', onMatched);
   socket.on('rtc', onRtc);
   socket.on('peer-loc', onPeerLoc);
   socket.on('pair-over', onPairOver);
+  socket.on('chat', (msg) => { if (S.pair && msg.pairId === S.pair.id) addMsg('other', msg.text); });
+  socket.on('speech', (msg) => { if (S.pair && msg.pairId === S.pair.id) addSub('other', msg.text); });
 
   /* buttons */
   $('#btnNeedHelp').addEventListener('click', enterNeedHelp);
@@ -559,6 +765,8 @@ function init() {
   $('#btnSafe').addEventListener('click', () => { S.role = null; stopWatch(); show('view-landing'); });
   $('#btnMoreHelp').addEventListener('click', () => show('view-sos-home'));
   $('#btnCloseLocModal').addEventListener('click', () => { $('#locModal').hidden = true; });
+  $('#chatSend').addEventListener('click', sendChat);
+  $('#chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
 
   wireSOSButton();
 
@@ -573,6 +781,7 @@ function init() {
     if (S.role === 'sos' && !S.pair && !S.sos.active) refreshNearbyCount();
   }, 10000);
 
+  applyI18n();
   show('view-landing');
 }
 document.addEventListener('DOMContentLoaded', init);
