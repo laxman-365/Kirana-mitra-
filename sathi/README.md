@@ -1,0 +1,95 @@
+# Sathi (साथी) — Never alone
+
+> **महिला, मुले व आणीबाणी सुरक्षा App (prototype)**
+> A web app (runs on phone browser, installable as PWA) that gives women, children and anyone in trouble one button to safety.
+
+## Problem (प्रश्न)
+
+संकटात (कोणत्याही ठिकाणी — मोठी समस्या किंवा लहानही) मदत करायला जाणारे
+लोकचे **नंबर मागच्यावर नसतात**, **पॉलिस इत्यादींची सुविधा लगेच आढळत नाही**,
+आणि **आणीबाणीचे नंबर माहितीही नसतात** — त्यामुळे अनर्थ होतो.
+
+In trouble, you often don't have anyone's number, can't find police/ambulance
+quickly, and may not even know emergency numbers. That gap causes harm.
+
+## Solution (उपाय)
+
+1. **SOS button** — 2 seconds hold.
+2. App picks a **RANDOM** "Sathi" (volunteer) who is within **500 m** of your
+   live location (expands to 1 km → 2.5 km if nobody is nearby) and places an
+   **in-app voice call automatically** (WebRTC).
+3. **Zero identity**: no phone number, no name, no profile. Each side only
+   sees an anonymous id (e.g. `Sathi #4821`).
+4. **Mutual live location** — during the call both parties see each other on
+   a live map (blue = you, red = the other person), updated every couple of
+   seconds. You can also share the location link with police/family.
+5. **Emergency numbers always one tap away** — 112, 100, 1091, 1098, 108,
+   1090, 181, 1930 with one-tap dialing (for when you don't know the numbers).
+6. **Sathi (volunteer) mode** — open the app, tap “I'm ready to help”, and
+   you join the 500 m help pool. When someone near you presses SOS, the app
+   calls you (with a countdown so you can accept immediately or decline).
+
+## Run it (सुरू कसे करावे)
+
+```bash
+cd sathi
+npm install
+npm start          # http://localhost:3000
+```
+
+### Demo in 2 tabs (प्रायोगिक डेमो)
+
+1. Open the app in **two browser tabs**.
+2. Tab 1 → **मला मदत करायची आहे** (ready to help) — allow location.
+3. Tab 2 → **मदत हवी आहे** — **hold SOS for 2 s**.
+4. Tab 1 gets the SOS call (auto-answer countdown) → accept.
+5. Both tabs now show **each other's live location** on the map. No numbers
+   ever appear. End the call → both return to their modes.
+
+Headless test of the matching core (server must be running):
+
+```bash
+npm test
+```
+
+## Architecture
+
+| Layer | Tech |
+|---|---|
+| Server | Node.js + Express + **Socket.IO** (presence pool, matching, signalling relay) |
+| Voice call | **WebRTC** (RTCPeerConnection), STUN only — anonymous, no numbers |
+| Map | **Leaflet** + OpenStreetMap tiles (no API key) |
+| UI | Vanilla JS, mobile-first, Marathi (Devanagari) + English |
+
+### Matching rules (server)
+
+- Helpers must send a fresh location (< 90 s) to stay in the pool.
+- On SOS: eligible = helpers within 500 m → pick **randomly**. If none:
+  expand to 1 km, then 2.5 km (client shows each ring). If still none:
+  `no-helpers` → UI pushes **112**.
+- A matched helper is removed from the pool for the duration of the call.
+- No answer in 25 s → pair dissolves, SOS automatically retries (up to 3).
+- If a peer disconnects mid-call → the other side is notified and retries.
+
+### Privacy by design
+
+- **No accounts, no phone numbers, no names** are collected or transmitted —
+  only random socket ids and coordinates.
+- Location is shared **only** while a help session is active, then dropped.
+- Volunteers must explicitly opt in (“ready to help”) and can stop anytime.
+
+## Known limits & next steps (पुढचे पाऊल)
+
+- This is a **working prototype** on the web. For a store app: wrap the same
+  server + UI in **React Native / Flutter** (WebRTC & maps both supported) or
+  a native Android app with foreground location service.
+- Real product needs: accounts + vetting for volunteers, abuse/SCAM guard,
+  rate limiting, call recording option (with consent), integration with
+  112 control room (send live location), push notifications when app is
+  backgrounded, offline SOS fallback (SMS).
+- Voice call uses WebRTC with public STUN; for reliability in production add
+  your own STUN/TURN (e.g. coturn).
+
+---
+
+Sathi — *आपण एकटे नाही* 🤝

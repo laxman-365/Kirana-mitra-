@@ -1,0 +1,11 @@
+{
+  "name": "Sathi — साथी (Never alone)",
+  "short_name": "Sathi",
+  "description": "Women & child safety: SOS connects you by anonymous in-app call to a random nearby helper within 500 m, with live location sharing.",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "lang": "mr"
+}

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="mr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1117">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Sathi — साथी | Never alone</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23ff453a'/%3E%3Ctext x='32' y='41' font-size='26' font-family='sans-serif' font-weight='bold' fill='white' text-anchor='middle'%3Eसा%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/leaflet/leaflet.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500;600;700;800&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="phone">
+
+  <!-- ================= TOP BAR ================= -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo">🤝</span>
+      <div>
+        <div class="brand-name">Sathi <span class="dev">साथी</span></div>
+        <div class="brand-sub">Never alone · आपण एकटे नाही</div>
+      </div>
+    </div>
+    <span class="badge" id="roleBadge" hidden></span>
+  </header>
+
+  <main>
+
+    <!-- ================= LANDING ================= -->
+    <section class="view active" id="view-landing">
+      <div class="hero">
+        <h1>कोणीही<br>एकटे नाही</h1>
+        <p class="hero-sub">
+          संकटात <b>SOS</b> दाबा — जवळच्या <b>500 मी.</b> मधून एक यादृच्छिक (random)
+          <b>सथी</b> या App मधून थेट कॉल करतो. फोन नंबर नाही, ओळख नाही —
+          फक्त मदत. दोघांचेही <b>live location</b> दिसत राहतं.
+        </p>
+      </div>
+
+      <button class="cta cta-red" id="btnNeedHelp">
+        <span class="cta-ic">🆘</span>
+        <span class="cta-main">मदत हवी आहे <span class="en">I need help — SOS</span></span>
+      </button>
+
+      <button class="cta cta-green" id="btnHelpReady">
+        <span class="cta-ic">🤝</span>
+        <span class="cta-main">मला मदत करायची आहे <span class="en">I'm ready to help</span></span>
+      </button>
+
+      <div class="card">
+        <h3>🚨 आणीबाणीचे नंबर — विसरलेत? इथे आहेत <span class="en">Emergency numbers</span></h3>
+        <div class="nums-grid">
+          <a class="num-card" href="tel:112"><span class="num-ic">🚨</span><span class="num-name">राष्ट्रीय आणीबाणी <i>Police·Fire·Ambulance</i></span><span class="num-big">112</span></a>
+          <a class="num-card" href="tel:100"><span class="num-ic">👮</span><span class="num-name">पॉलिस <i>Police</i></span><span class="num-big">100</span></a>
+          <a class="num-card" href="tel:1091"><span class="num-ic">👩</span><span class="num-name">महिला हेलपायन <i>Women's Helpline</i></span><span class="num-big">1091</span></a>
+          <a class="num-card" href="tel:1098"><span class="num-ic">🧒</span><span class="num-name">मुलांसाठी हेलपायन <i>Child Helpline</i></span><span class="num-big">1098</span></a>
+          <a class="num-card" href="tel:108"><span class="num-ic">🚑</span><span class="num-name">अॅम्बुलन्स <i>Ambulance</i></span><span class="num-big">108</span></a>
+          <a class="num-card" href="tel:1090"><span class="num-ic">🛡️</span><span class="num-name">मुलांची आणीबाणी <i>Child Emergency</i></span><span class="num-big">1090</span></a>
+          <a class="num-card" href="tel:181"><span class="num-ic">🏠</span><span class="num-name">गृहहिंसेविरुद्ध <i>Domestic Abuse</i></span><span class="num-big">181</span></a>
+          <a class="num-card" href="tel:1930"><span class="num-ic">💻</span><span class="num-name">सायबर गुन्हे <i>Cyber Crime</i></span><span class="num-big">1930</span></a>
+        </div>
+      </div>
+
+      <details class="card demo-box">
+        <summary>▶ डेमो कसे धरायचे? <span class="en">How to demo (2 tabs)</span></summary>
+        <ol>
+          <li>हीच App <b>दुसऱ्या tab</b> मध्ये उघडा.</li>
+          <li>Tab 1: <b>“मला मदत करायची आहे”</b> निवडा (location permission द्या).</li>
+          <li>Tab 2: <b>“मदत हवी आहे”</b> निवडा आणि <b>SOS 2 सेकंद दाबून द्या</b>.</li>
+          <li>Tab 1 मध्ये SOS कॉल येतो — <b>कॉल घ्या</b>.</li>
+          <li>दोन्ही tab मध्ये एकमेकांचे <b>live location</b> map वर दिसतं. नंबर कधीच दिसत नाही!</li>
+        </ol>
+      </details>
+
+      <p class="privacy">🔒 फोन नंबर कधीच साठवत नाही · Live location फक्त मदतीच्या session दरम्यान · मदत करणारा <b>random</b> आणि अज्ञात असतो</p>
+    </section>
+
+    <!-- ================= SOS HOME ================= -->
+    <section class="view" id="view-sos-home">
+      <div class="row-between">
+        <button class="linkbtn" id="btnBackLanding">← परत</button>
+        <span class="chip" id="nearbyCount">जवळचे सथी मोजत आहोत…</span>
+      </div>
+
+      <div class="card sos-card">
+        <h3>आणीबाणीत हो? खाली दाबून द्या <span class="en">In an emergency?</span></h3>
+        <div class="sos-wrap">
+          <button class="sos-btn" id="sosBtn" aria-label="SOS — 2 seconds hold">
+            <span class="sos-ring" id="sosRing"></span>
+            <span class="sos-core">
+              <span class="sos-text">SOS</span>
+              <span class="sos-hint">2 से. दाबून द्या<br><span class="en">hold 2 s</span></span>
+            </span>
+          </button>
+        </div>
+        <p class="sos-desc">
+          SOS दबला की: जवळच्या <b>500 m</b> मधून <b>random सथी</b> ला App कॉल ·
+          नंबर/ओळख लपवलेली · दोघांचेही <b>live location</b> map वर.
+        </p>
+        <div class="perm-row" id="permBadges"></div>
+      </div>
+
+      <div class="quick-row">
+        <a class="qbtn" href="tel:112">🚨 112</a>
+        <a class="qbtn" href="tel:100">👮 100</a>
+        <a class="qbtn" href="tel:1091">👩 1091</a>
+        <a class="qbtn" href="tel:1098">🧒 1098</a>
+      </div>
+    </section>
+
+    <!-- ================= SOS SEARCHING ================= -->
+    <section class="view" id="view-sos-search">
+      <div class="card status-card">
+        <div class="status-ic" id="searchSpin">🔍</div>
+        <div class="status-text" id="searchStatus">जवळपास <b>500 m</b> मधून सथी शोधत आहोत… <span class="en">Searching nearby sathi…</span></div>
+        <span class="chip" id="searchNearby">जवळचे सथी: —</span>
+      </div>
+      <div class="map-box"><div id="mapSearch" class="map"></div></div>
+      <div class="row-between btn-row">
+        <button class="btn ghost" id="btnCancelSOS">✕ SOS रद्द करा</button>
+        <a class="btn danger" href="tel:112">📞 थेट 112 पॉलिस</a>
+      </div>
+      <p class="fine">तुमचे live location जवळच्या सथीकडे जात आहे — फक्त या session पर्यंत. <span class="en">Only this session.</span></p>
+    </section>
+
+    <!-- ================= HELPER READY ================= -->
+    <section class="view" id="view-helper-ready">
+      <div class="card status-card green">
+        <div class="status-ic">🟢</div>
+        <div class="status-text"><b>तुम्ही सथी — तयार आहात!</b><br>जवळचा कोणी SOS दबवला की तुम्हाला कॉल येतो. <span class="en">You are on guard.</span></div>
+      </div>
+      <div class="map-box"><div id="mapReady" class="map"></div></div>
+      <p class="fine">हा map तुमच्या <b>live location</b> शी active आहे. मदतीसाठी तुम्ही <b>500 m</b> पर्यंतचा क्षेत्र कव्हर करता. <span class="en">You cover a 500 m radius.</span></p>
+      <div class="btn-row">
+        <button class="btn ghost" id="btnStopHelper">⏸ मदत बंद करा</button>
+        <a class="btn ghost" href="tel:112">📞 112</a>
+      </div>
+    </section>
+
+    <!-- ================= HELPER INCOMING ================= -->
+    <section class="view" id="view-incoming">
+      <div class="card alert-card">
+        <div class="alert-ic">🆘</div>
+        <div>
+          <div class="alert-title">जवळपास SOS आला!</div>
+          <div class="alert-sub">अंतर: <b id="incDist">—</b> · <span id="incCount" class="count">5</span> सेकंदात कॉल जोडला जातो</div>
+        </div>
+      </div>
+      <div class="map-box"><div id="mapIncoming" class="map"></div></div>
+      <p class="fine">दोन्ही बाजूंनी <b>नंबर व ओळख लपवली आहे</b> — फक्त live location. <span class="en">Fully anonymous call.</span></p>
+      <div class="row-between btn-row">
+        <button class="btn ghost" id="btnDecline">🚫 लावू शकत नाही</button>
+        <button class="btn primary" id="btnAnswer">📞 आत्ता कॉल घ्या</button>
+      </div>
+    </section>
+
+    <!-- ================= CALL ================= -->
+    <section class="view" id="view-call">
+      <div class="card call-head">
+        <div>
+          <div class="call-who" id="callWho">—</div>
+          <div class="call-meta">
+            <span class="chip" id="callDist">अंतर: —</span>
+            <span class="chip" id="callTimer">00:00</span>
+            <span class="chip ok" id="callState">जोडत आहोत…</span>
+          </div>
+        </div>
+      </div>
+      <div class="map-box map-tall"><div id="mapCall" class="map"></div></div>
+      <p class="fine">🔵 तुम्ही &nbsp; 🔴 दुसरा व्यक्ती — दोघांचेही <b>live location</b> दिसत राहते. <span class="en">Both live on map.</span></p>
+      <div class="call-controls">
+        <button class="cbtn" id="btnMute">🎙<span>Mute</span></button>
+        <button class="cbtn" id="btnSpeaker">🔊<span>Speaker</span></button>
+        <button class="cbtn cbtn-end" id="btnEnd">⏹<span>End</span></button>
+      </div>
+      <div class="row-between btn-row">
+        <a class="btn danger" href="tel:112">🚨 पॉलिस 112 ला कॉल</a>
+        <button class="btn ghost" id="btnShare">📍 Live location share करा</button>
+      </div>
+    </section>
+
+    <!-- ================= END / SAFE ================= -->
+    <section class="view" id="view-end">
+      <div class="end-wrap">
+        <div class="end-ic" id="endIc">✅</div>
+        <h2 id="endTitle">तुम्ही सुरक्षित आहात का?</h2>
+        <p class="hero-sub" id="endSub">तुमच्या सथीला धन्यवाद! ❤️ · <span class="en">Thanks to your sathi!</span></p>
+        <button class="cta cta-green" id="btnSafe">✅ हो, मी सुरक्षित आहे</button>
+        <button class="cta cta-red" id="btnMoreHelp">🆘 अजून मदत हवी</button>
+        <a class="cta cta-plain" href="tel:112">🚨 थेट 112 पॉलिस</a>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- toasts -->
+<div id="toasts" aria-live="polite"></div>
+
+<!-- manual location modal -->
+<div class="modal" id="locModal" hidden>
+  <div class="modal-card">
+    <h3>📍 तुमचे स्थान नोंदवा</h3>
+    <p class="fine">Location permission मिळाली नाही — map वर <b>click/tap</b> करून तुमची लागू ठिकाण निवडा. <span class="en">Tap to set your location.</span></p>
+    <div class="map-box"><div id="mapManual" class="map"></div></div>
+    <button class="btn ghost" id="btnCloseLocModal">✕ बंद करा</button>
+  </div>
+</div>
+
+<audio id="remoteAudio" autoplay playsinline></audio>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/leaflet/leaflet.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
