@@ -13,12 +13,17 @@
 
 ## 2. HTTP hardening (helmet + custom)
 
-- **Content-Security-Policy:** `default-src 'self'`, `object-src 'none'`,
+- **Content-Security-Policy** (`useDefaults:false` — we control every
+  directive): `default-src 'self'`, `script-src 'self'`, `object-src 'none'`,
   strict `connect-src` allow-list (self + OSM/CARTO tiles + MyMemory +
   Lingva), `base-uri 'self'`, fonts only from googleapis/gstatic.
-  Production mode (`SATHI_PROD=1`) adds `frame-ancestors 'none'`.
+  Framing directives (`frame-ancestors`, `X-Frame-Options`) are intentionally
+  OFF so the app can be embedded in previews/iframes; set `SATHI_NOFRAME=1`
+  on your own production origin to add `frame-ancestors 'none'`
+  (clickjacking hardening).
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
-  `x-powered-by` disabled, strict-transport when HTTPS fronted.
+  `x-powered-by` disabled, HSTS only when HTTPS-fronted (not in plain-http
+  dev contexts).
 - Cache policy: long cache for static only in prod, no-cache in dev.
 
 ## 3. Socket hardening

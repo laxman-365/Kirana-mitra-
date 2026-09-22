@@ -240,7 +240,16 @@
 <div id="toasts" aria-live="polite"></div>
 
 <!-- manual location modal -->
-<div class="modal" id="locModal" hidden>
+  <div class="modal" id="popupModal" hidden>
+    <div class="card modal-card">
+      <h3 data-i18n="popupTitle">Demo tab उघडून घ्या</h3>
+      <p data-i18n-html="popupSub">Browser ने popup block केला. हा link click करून दुसरी tab उघडा — ती “साथी (मदत)” मोडमध्ये येईल.</p>
+      <a class="cta cta-plain popup-link" target="_blank" rel="noopener">＋ ?role=helper</a>
+      <button class="cta cta-plain" id="btnPopupClose" data-i18n="popupClose">OK</button>
+    </div>
+  </div>
+
+  <div class="modal" id="locModal" hidden>
   <div class="modal-card">
     <h3 data-i18n="locTitle">📍 तुमचे स्थान नोंदवा</h3>
     <p class="fine" data-i18n="locFine">Location permission मिळाली नाही — map वर <b>click/tap</b> करून तुमची लागू ठिकाण निवडा.</p>

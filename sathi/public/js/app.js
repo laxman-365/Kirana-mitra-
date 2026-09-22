@@ -925,7 +925,7 @@ function init() {
   });
   socket.on('no-helpers', () => {
     $('#searchSpin').classList.remove('spin');
-    $('#searchStatus').innerHTML = t('noHelpers');
+    $('#searchStatus').innerHTML = t('noHelpers') + ' <a class="openhelper-link" id="btnOpenHelper" href="?role=helper">＋ ' + t('noHelpersCta') + '</a>';
     toast(t('t_noSathi'));
     logEvent('no-helpers');
   });
@@ -955,13 +955,25 @@ function init() {
   $('#chatSend').addEventListener('click', sendChat);
   $('#chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
   $('#btnDemo').addEventListener('click', () => {
-    try {
-      window.open(location.origin + location.pathname + '?role=helper', '_blank');
-    } catch (e) {
-      toast('Popup block झाला — नवीन tab मध्ये उघडा: ' + location.origin + location.pathname + '?role=helper');
+    const w = window.open(location.origin + location.pathname + '?role=helper', '_blank');
+    if (!w) {
+      const m = $('#popupModal');
+      if (m) {
+        m.querySelector('a').href = location.origin + location.pathname + '?role=helper';
+        m.hidden = false;
+      }
+      return;
     }
     enterNeedHelp();
     toast('दुसऱ्या tab मध्ये location permission द्या → मग इथे SOS दबा');
+  });
+  $('#btnPopupClose').addEventListener('click', () => { $('#popupModal').hidden = true; });
+  $('#searchStatus').addEventListener('click', (e) => {
+    const a = e.target && e.target.closest ? e.target.closest('#btnOpenHelper') : null;
+    if (a) {
+      e.preventDefault();
+      window.open(location.origin + location.pathname + '?role=helper', '_blank');
+    }
   });
 
   wireSOSButton();

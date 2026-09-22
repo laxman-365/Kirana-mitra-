@@ -51,12 +51,19 @@ const cspDirectives = {
   objectSrc: ["'none'"],
   baseUri: ["'self'"],
 };
-if (PROD) cspDirectives.frameAncestors = ["'none'"]; // strict mode for production origin
+// NOTE: useDefaults:false → we control every directive. frame-ancestors is
+// left OFF so the app can be embedded in preview/iframes; for your own
+// production origin set SATHI_NOFRAME=1 to add clickjacking protection.
+if (PROD && process.env.SATHI_NOFRAME === '1') cspDirectives.frameAncestors = ["'none'"];
 
 app.use(helmet({
-  contentSecurityPolicy: { directives: cspDirectives },
+  contentSecurityPolicy: { useDefaults: false, directives: cspDirectives },
+  frameguard: false,
   crossOriginEmbedderPolicy: false,
   referrerPolicy: { policy: 'no-referrer' },
+  upgradeInsecureRequests: null,
+  crossOriginOpenerPolicy: false,
+  originAgentCluster: false,
 }));
 
 app.use((req, res, next) => {
